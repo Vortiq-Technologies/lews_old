@@ -1,0 +1,35 @@
+{
+  "model_version": "4.0",
+  "model_name": "Dual-Source Landslide Prediction Model",
+  "training_date": "2026-09-10T15:31:31.451271",
+  "features": {
+    "total": 13,
+    "sensor": [
+      "soilMoisture",
+      "waterLevel",
+      "tilt",
+      "vibration",
+      "ultrasonicDistance"
+    ],
+    "terrain": [
+      "elevation",
+      "slope",
+      "aspect",
+      "rainfall"
+    ],
+    "climate": [
+      "temperature",
+      "humidity",
+      "windSpeed",
+      "pressure"
+    ]
+  },
+  "performance": {
+    "accuracy": 0.9995,
+    "f1_score": 0.9997148560022812,
+    "roc_auc": 0.999958283505298
+  },
+  "training_samples": 10000,
+  "model_type": "LightGBM",
+  "description": "Combines sensor data + satellite terrain + climate for comprehensive landslide risk assessment"
+}

@@ -530,6 +530,145 @@ def predict():
             'traceback': error_traceback.split('\n')[-3:-1] if error_traceback else None
         }), 500
 
+@app.route('/predict-dual-source', methods=['POST'])
+def predict_dual_source():
+    """
+    Predict using combined sensor + satellite data (13 features)
+    
+    Request body:
+    {
+        "soilMoisture": 75,
+        "waterLevel": 32,
+        "tilt": 2.5,
+        "vibration": 5,
+        "ultrasonicDistance": 125,
+        "elevation": 350,
+        "slope": 15,
+        "aspect": 180,
+        "rainfall": 45,
+        "temperature": 28,
+        "humidity": 85,
+        "windSpeed": 5,
+        "pressure": 1013
+    }
+    """
+    try:
+        # Load dual-source model
+        DUAL_MODEL_PATH = 'landslide_model_dual_source.pkl'
+        if not os.path.exists(DUAL_MODEL_PATH):
+            return jsonify({
+                'success': False,
+                'error': 'Dual-source model not found. Please train it first.'
+            }), 404
+        
+        dual_model = joblib.load(DUAL_MODEL_PATH)
+        
+        data = request.json
+        
+        # Validate all 13 features
+        required_features = [
+            'soilMoisture', 'waterLevel', 'tilt', 'vibration', 'ultrasonicDistance',
+            'elevation', 'slope', 'aspect', 'rainfall',
+            'temperature', 'humidity', 'windSpeed', 'pressure'
+        ]
+        
+        missing = [f for f in required_features if f not in data]
+        if missing:
+            return jsonify({
+                'success': False,
+                'error': f'Missing features: {", ".join(missing)}'
+            }), 400
+        
+        # Create feature DataFrame
+        features = pd.DataFrame([{
+            feat: data.get(feat, 0) for feat in required_features
+        }])
+        
+        # Make prediction
+        prediction_class = dual_model.predict(features)[0]
+        probabilities = dual_model.predict_proba(features)[0]
+        
+        # Calculate SHAP values
+        dual_explainer = shap.TreeExplainer(dual_model)
+        shap_values = dual_explainer.shap_values(features)
+        
+        if isinstance(shap_values, list):
+            shap_vals = shap_values[-1][0]
+        else:
+            shap_vals = shap_values[0]
+        
+        # Calculate source contributions
+        sensor_contribution = sum(abs(shap_vals[0:5]))
+        terrain_contribution = sum(abs(shap_vals[5:9]))
+        climate_contribution = sum(abs(shap_vals[9:13]))
+        total_contribution = sensor_contribution + terrain_contribution + climate_contribution
+        
+        # Get top factors with source labels
+        feature_names = required_features
+        contributions = [(i, feature_names[i], shap_vals[i]) for i in range(len(shap_vals))]
+        contributions.sort(key=lambda x: abs(x[2]), reverse=True)
+        
+        top_factors = []
+        for i, feature_name, contrib in contributions[:5]:
+            if abs(contrib) > 0.01:
+                source = 'sensor' if i < 5 else 'satellite'
+                impact = '+' if contrib > 0 else ''
+                display_name = feature_name.replace('soilMoisture', 'Soil Moisture')\
+                                         .replace('waterLevel', 'Water Level')\
+                                         .replace('ultrasonicDistance', 'Distance')
+                top_factors.append(f"{display_name} ({source}): {impact}{contrib:.2f}")
+        
+        # Map prediction to risk level
+        if prediction_class == 0:
+            risk_level = 'LOW'
+            risk_score = 20
+        else:
+            landslide_prob = probabilities[1]
+            if landslide_prob >= 0.8:
+                risk_level = 'CRITICAL'
+                risk_score = 90
+            elif landslide_prob >= 0.6:
+                risk_level = 'HIGH'
+                risk_score = 75
+            else:
+                risk_level = 'MEDIUM'
+                risk_score = 50
+        
+        confidence = float(max(probabilities) * 100)
+        
+        response = {
+            'success': True,
+            'prediction': {
+                'riskLevel': risk_level,
+                'riskScore': int(risk_score),
+                'confidence': round(confidence, 2),
+                'sourceContribution': {
+                    'sensors': round(sensor_contribution / total_contribution * 100) if total_contribution > 0 else 50,
+                    'terrain': round(terrain_contribution / total_contribution * 100) if total_contribution > 0 else 25,
+                    'climate': round(climate_contribution / total_contribution * 100) if total_contribution > 0 else 25,
+                    'satellite': round((terrain_contribution + climate_contribution) / total_contribution * 100) if total_contribution > 0 else 50
+                },
+                'topFactors': top_factors,
+                'dataQuality': data.get('dataQuality', {
+                    'sensorStatus': 'ACTIVE',
+                    'satelliteStatus': 'CACHED',
+                    'completeness': 100
+                })
+            }
+        }
+        
+        return jsonify(convert_to_python_types(response))
+        
+    except Exception as e:
+        import traceback
+        print(f"❌ Dual-source prediction error: {e}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'error_type': type(e).__name__
+        }), 500
+
 @app.route('/retrain', methods=['POST'])
 def retrain():
     """
